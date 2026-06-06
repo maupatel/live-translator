@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Live AI Translator</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --accent: #38bdf8;
+    --accent-stop: #f43f5e;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 60px;
+  }
+  h1 { font-size: 1.4rem; margin: 8px 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; font-size: 0.9rem; text-align: center; max-width: 640px; }
+  .controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 18px;
+  }
+  select {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid #334155;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 1rem;
+    max-width: 60vw;
+  }
+  button {
+    border: none;
+    border-radius: 999px;
+    padding: 14px 28px;
+    font-size: 1.05rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: #03121f;
+    background: var(--accent);
+    transition: transform .05s ease, background .2s ease;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  button:active { transform: scale(0.97); }
+  button.listening { background: var(--accent-stop); color: #fff; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: currentColor; }
+  button.listening .dot { animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+
+  .panel {
+    width: 100%;
+    max-width: 760px;
+    background: var(--card);
+    border: 1px solid #334155;
+    border-radius: 16px;
+    padding: 20px;
+    margin-top: 6px;
+  }
+  .label {
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #detected { color: var(--accent); font-weight: 600; text-transform: none; letter-spacing: 0; }
+  #english {
+    font-size: 1.5rem;
+    line-height: 1.5;
+    min-height: 2.2em;
+    white-space: pre-wrap;
+  }
+  #english .interim { color: var(--muted); }
+  #original {
+    margin-top: 6px;
+    font-size: 1rem;
+    color: var(--muted);
+    white-space: pre-wrap;
+    min-height: 1.4em;
+  }
+  #status { margin-top: 14px; font-size: .85rem; color: var(--muted); min-height: 1.2em; text-align: center; }
+  .row2 { display:flex; gap:8px; margin-top:16px; padding-top:14px; border-top:1px solid #334155; }
+  .ghost { background: transparent; border:1px solid #334155; color: var(--text); padding:8px 16px; font-size:.85rem; }
+  .warn { color: #fbbf24; }
+  .err { color: #fb7185; }
+</style>
+</head>
+<body>
+  <h1>🎙️ Live AI Translator</h1>
+  <p class="sub">Press <b>Translate</b>, then speak or point your mic at the speaker. The live English appears below. Translation is AI-powered and auto-detects the language; pick the spoken language below for the most accurate transcription.</p>
+
+  <div class="controls">
+    <select id="srcLang" title="Language being spoken (for transcription accuracy)"></select>
+    <button id="toggle"><span class="dot"></span><span id="btnLabel">Translate</span></button>
+  </div>
+
+  <div class="panel">
+    <div class="label"><span>English</span><span id="detected"></span></div>
+    <div id="english"></div>
+    <div class="label" style="margin-top:18px">Heard (original)</div>
+    <div id="original"></div>
+    <div class="row2">
+      <button class="ghost" id="copyBtn">Copy English</button>
+      <button class="ghost" id="clearBtn">Clear</button>
+    </div>
+  </div>
+  <div id="status"></div>
+
+<script>
+// ---- Language list (BCP-47 codes Chrome speech recognition accepts) ----
+const LANGS = [
+  ["auto","🌐 Auto-detect (best effort)"],
+  ["af-ZA","Afrikaans"],["sq-AL","Albanian"],["am-ET","Amharic"],["ar-SA","Arabic"],
+  ["hy-AM","Armenian"],["az-AZ","Azerbaijani"],["eu-ES","Basque"],["bn-BD","Bengali"],
+  ["bs-BA","Bosnian"],["bg-BG","Bulgarian"],["my-MM","Burmese"],["ca-ES","Catalan"],
+  ["zh-CN","Chinese (Mandarin, Simplified)"],["zh-TW","Chinese (Mandarin, Traditional)"],
+  ["zh-HK","Chinese (Cantonese)"],["hr-HR","Croatian"],["cs-CZ","Czech"],["da-DK","Danish"],
+  ["nl-NL","Dutch"],["en-US","English (US)"],["en-GB","English (UK)"],["en-IN","English (India)"],
+  ["et-EE","Estonian"],["fil-PH","Filipino"],["fi-FI","Finnish"],["fr-FR","French"],
+  ["fr-CA","French (Canada)"],["gl-ES","Galician"],["ka-GE","Georgian"],["de-DE","German"],
+  ["el-GR","Greek"],["gu-IN","Gujarati"],["he-IL","Hebrew"],["hi-IN","Hindi"],["hu-HU","Hungarian"],
+  ["is-IS","Icelandic"],["id-ID","Indonesian"],["it-IT","Italian"],["ja-JP","Japanese"],
+  ["jv-ID","Javanese"],["kn-IN","Kannada"],["kk-KZ","Kazakh"],["km-KH","Khmer"],["ko-KR","Korean"],
+  ["lo-LA","Lao"],["lv-LV","Latvian"],["lt-LT","Lithuanian"],["mk-MK","Macedonian"],
+  ["ms-MY","Malay"],["ml-IN","Malayalam"],["mr-IN","Marathi"],["mn-MN","Mongolian"],
+  ["ne-NP","Nepali"],["nb-NO","Norwegian"],["fa-IR","Persian"],["pl-PL","Polish"],
+  ["pt-BR","Portuguese (Brazil)"],["pt-PT","Portuguese (Portugal)"],["pa-IN","Punjabi"],
+  ["ro-RO","Romanian"],["ru-RU","Russian"],["sr-RS","Serbian"],["si-LK","Sinhala"],
+  ["sk-SK","Slovak"],["sl-SI","Slovenian"],["es-ES","Spanish (Spain)"],["es-MX","Spanish (Mexico)"],
+  ["es-US","Spanish (US)"],["sw-KE","Swahili"],["sv-SE","Swedish"],["ta-IN","Tamil"],
+  ["te-IN","Telugu"],["th-TH","Thai"],["tr-TR","Turkish"],["uk-UA","Ukrainian"],["ur-PK","Urdu"],
+  ["uz-UZ","Uzbek"],["vi-VN","Vietnamese"],["zu-ZA","Zulu"]
+];
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const btn = document.getElementById('toggle');
+const btnLabel = document.getElementById('btnLabel');
+const srcLang = document.getElementById('srcLang');
+const englishEl = document.getElementById('english');
+const originalEl = document.getElementById('original');
+const statusEl = document.getElementById('status');
+const detectedEl = document.getElementById('detected');
+const copyBtn = document.getElementById('copyBtn');
+const clearBtn = document.getElementById('clearBtn');
+
+// Map of language code -> display name, for showing the detected language nicely.
+const NAME_BY_CODE = {};
+LANGS.forEach(([code,name]) => { NAME_BY_CODE[code.split('-')[0]] = name.replace(/\s*\(.*\)/,''); });
+
+LANGS.forEach(([code,name]) => {
+  const o = document.createElement('option');
+  o.value = code; o.textContent = name;
+  srcLang.appendChild(o);
+});
+// Sensible default: Spanish.
+srcLang.value = "es-ES";
+
+let recog = null, listening = false;
+let englishText = "", originalText = "";
+
+if (!SR) {
+  statusEl.innerHTML = '<span class="err">This browser doesn\'t support speech recognition. Please use Google Chrome or Microsoft Edge on desktop.</span>';
+  btn.disabled = true;
+}
+
+// AI translation via Google's neural endpoint. sl=auto => detects ANY language.
+async function translate(text) {
+  const url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=" + encodeURIComponent(text);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("translate http " + res.status);
+  const data = await res.json();
+  const translated = data[0].map(seg => seg[0]).join("");
+  const detected = data[2]; // detected source language code
+  return { translated, detected };
+}
+
+function startRecognition() {
+  recog = new SR();
+  // Web Speech API needs a concrete locale; for "auto" use the browser's UI language.
+  recog.lang = (srcLang.value === "auto") ? (navigator.language || "en-US") : srcLang.value;
+  recog.continuous = true;
+  recog.interimResults = true;
+
+  recog.onstart = () => { statusEl.textContent = "Listening… speak now."; };
+
+  recog.onresult = async (event) => {
+    let interim = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      const transcript = result[0].transcript;
+      if (result.isFinal) {
+        originalText += transcript;
+        originalEl.textContent = originalText;
+        const base = englishText;
+        try {
+          const { translated, detected } = await translate(transcript.trim());
+          englishText = (base + " " + translated).trim();
+          renderEnglish("");
+          if (detected) detectedEl.textContent = "detected: " + (NAME_BY_CODE[detected] || detected);
+        } catch (e) {
+          statusEl.innerHTML = '<span class="warn">Translation hiccup — still listening.</span>';
+        }
+      } else {
+        interim += transcript;
+      }
+    }
+    originalEl.textContent = (originalText + " " + interim).trim();
+    renderEnglish(interim ? "  …(translating)" : "");
+  };
+
+  recog.onerror = (e) => {
+    if (e.error === 'no-speech') return;
+    if (e.error === 'not-allowed') {
+      statusEl.innerHTML = '<span class="err">Microphone blocked. Allow mic access and try again.</span>';
+      stop();
+    } else {
+      statusEl.innerHTML = '<span class="warn">Mic issue: ' + e.error + ' — restarting…</span>';
+    }
+  };
+
+  recog.onend = () => { if (listening) { try { recog.start(); } catch (_) {} } };
+  recog.start();
+}
+
+function renderEnglish(suffix) {
+  englishEl.innerHTML = escapeHtml(englishText) +
+    (suffix ? '<span class="interim">' + escapeHtml(suffix) + '</span>' : '');
+}
+function escapeHtml(s){ return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function start() {
+  listening = true;
+  btn.classList.add('listening');
+  btnLabel.textContent = "Stop";
+  englishText = ""; originalText = ""; detectedEl.textContent = "";
+  englishEl.textContent = ""; originalEl.textContent = "";
+  startRecognition();
+}
+function stop() {
+  listening = false;
+  btn.classList.remove('listening');
+  btnLabel.textContent = "Translate";
+  statusEl.textContent = "Stopped.";
+  if (recog) { try { recog.stop(); } catch (_) {} }
+}
+
+btn.addEventListener('click', () => listening ? stop() : start());
+copyBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(englishText).then(() => { statusEl.textContent = "English copied."; });
+});
+clearBtn.addEventListener('click', () => {
+  englishText = ""; originalText = ""; detectedEl.textContent = "";
+  englishEl.textContent = ""; originalEl.textContent = "";
+});
+</script>
+</body>
+</html>
