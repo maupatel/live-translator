@@ -125,6 +125,26 @@
       <button class="ghost" id="clearBtn">Clear</button>
     </div>
   </div>
+
+  <div class="panel" style="margin-top:16px">
+    <div class="label">📁 Or upload an audio / video file (translated to English by in-browser Whisper)</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+      <input type="file" id="audioFile" accept="audio/*,video/*" style="color:var(--text); max-width:60vw;" />
+      <select id="quality" title="Model size">
+        <option value="Xenova/whisper-tiny">Fast (tiny)</option>
+        <option value="Xenova/whisper-base" selected>Accurate (base)</option>
+      </select>
+      <button id="fileBtn">Transcribe &amp; Translate</button>
+    </div>
+    <div id="fileProgress" style="margin-top:10px; font-size:.85rem; color:var(--muted);"></div>
+    <div class="meter" style="margin-top:8px; display:none;" id="fileBarWrap"><div id="fileBar" style="height:100%;width:0%;background:var(--accent);"></div></div>
+    <div class="label" style="margin-top:14px"><span>English</span><span id="fileDetected" style="color:var(--accent);text-transform:none;letter-spacing:0;"></span></div>
+    <div id="fileEnglish" style="font-size:1.25rem; line-height:1.5; white-space:pre-wrap; min-height:1.4em;"></div>
+    <div class="row2">
+      <button class="ghost" id="fileCopyBtn">Copy English</button>
+    </div>
+  </div>
+
   <div id="status"></div>
 
 <script>
@@ -378,6 +398,91 @@ copyBtn.addEventListener('click', () => {
 clearBtn.addEventListener('click', () => {
   englishCommitted = ""; originalCommitted = ""; liveEnglish = ""; detectedEl.textContent = "";
   englishEl.textContent = ""; originalEl.textContent = "";
+});
+
+// ===================== FILE UPLOAD (in-browser Whisper) =====================
+const audioFile = document.getElementById('audioFile');
+const quality = document.getElementById('quality');
+const fileBtn = document.getElementById('fileBtn');
+const fileProgress = document.getElementById('fileProgress');
+const fileEnglish = document.getElementById('fileEnglish');
+const fileCopyBtn = document.getElementById('fileCopyBtn');
+const fileBarWrap = document.getElementById('fileBarWrap');
+const fileBar = document.getElementById('fileBar');
+const fileDetected = document.getElementById('fileDetected');
+
+const transcriberCache = {};
+async function getTranscriber(model, onProgress) {
+  if (transcriberCache[model]) return transcriberCache[model];
+  const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+  env.allowLocalModels = false;            // always fetch from the hub
+  env.useBrowserCache = true;              // cache model in the browser after first download
+  const t = await pipeline('automatic-speech-recognition', model, { quantized: true, progress_callback: onProgress });
+  transcriberCache[model] = t;
+  return t;
+}
+
+// Decode any audio/video file to mono 16 kHz Float32 (what Whisper expects).
+async function decodeToMono16k(file) {
+  const buf = await file.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await ctx.decodeAudioData(buf);
+  ctx.close();
+  const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * 16000)), 16000);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start();
+  const rendered = await offline.startRendering();
+  return rendered.getChannelData(0);
+}
+
+fileBtn.addEventListener('click', async () => {
+  const f = audioFile.files[0];
+  if (!f) { fileProgress.textContent = 'Pick an audio or video file first.'; return; }
+  fileBtn.disabled = true; fileEnglish.textContent = ''; fileDetected.textContent = '';
+  try {
+    const model = quality.value;
+    fileBarWrap.style.display = 'block';
+    fileProgress.textContent = 'Loading model (first run downloads it once, then it\'s cached)…';
+    const transcriber = await getTranscriber(model, (p) => {
+      if (p.status === 'progress' && p.total) {
+        const pct = Math.round((p.loaded / p.total) * 100);
+        fileBar.style.width = pct + '%';
+        fileProgress.textContent = `Downloading model: ${pct}% (${(p.file || '').split('/').pop()})`;
+      } else if (p.status === 'ready') {
+        fileProgress.textContent = 'Model ready.';
+      }
+    });
+
+    fileProgress.textContent = 'Decoding audio…';
+    const audio = await decodeToMono16k(f);
+
+    fileBar.style.width = '100%';
+    const secs = Math.round(audio.length / 16000);
+    fileProgress.textContent = `Transcribing & translating ${secs}s of audio… (runs locally; please wait)`;
+
+    const out = await transcriber(audio, {
+      task: 'translate',          // Whisper translates ANY language straight to English
+      chunk_length_s: 30,
+      stride_length_s: 5,
+      return_timestamps: false
+    });
+
+    fileEnglish.textContent = (out.text || '').trim() || '(no speech detected)';
+    fileDetected.textContent = 'via Whisper ' + model.split('-').pop();
+    fileProgress.textContent = 'Done ✓';
+    fileBarWrap.style.display = 'none';
+  } catch (e) {
+    fileBarWrap.style.display = 'none';
+    fileProgress.innerHTML = '<span class="err">Failed: ' + escapeHtml(String(e.message || e)) + '</span>';
+  } finally {
+    fileBtn.disabled = false;
+  }
+});
+
+fileCopyBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(fileEnglish.textContent).then(() => { fileProgress.textContent = 'English copied.'; });
 });
 </script>
 </body>
